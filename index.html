@@ -30,7 +30,7 @@ const happySound = document.getElementById('happySound');
 let obstacles = [
   "Kiwi issues", "Life issues", "Body pain", "Seema aunty", "Crying"
 ];
-let speed = 3.3; // 10% faster than 3.0
+let speed = 3.3; // 10% faster than old 3.0
 let gravity = 0.6;
 let jumpPower = -10;
 
@@ -44,7 +44,6 @@ let celebrationStartTime = 0;
 const CELEB_MS = 5000;
 
 function glossyBall(x, y, radius, label, faceBlink) {
-  // base purple glossy style
   let grad = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/5, x, y, radius);
   grad.addColorStop(0, "#d8b3ff");
   grad.addColorStop(1, "#7a3db8");
@@ -53,20 +52,17 @@ function glossyBall(x, y, radius, label, faceBlink) {
   ctx.arc(x, y, radius, 0, Math.PI*2);
   ctx.fill();
 
-  // eyes
   ctx.fillStyle = "#000";
   let eyeOffsetY = faceBlink ? y+2 : y;
   ctx.beginPath(); ctx.arc(x - radius/3, eyeOffsetY - radius/4, 4, 0, Math.PI*2); ctx.fill();
   ctx.beginPath(); ctx.arc(x + radius/3, eyeOffsetY - radius/4, 4, 0, Math.PI*2); ctx.fill();
 
-  // smile
   ctx.strokeStyle = "#000";
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(x, y+2, radius/2.5, 0, Math.PI);
   ctx.stroke();
 
-  // name label
   ctx.fillStyle = "#fff";
   ctx.font = "bold 14px sans-serif";
   ctx.textAlign = "center";
@@ -98,31 +94,27 @@ function loop(ts) {
   lastTime = ts;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Draw ground
   ctx.fillStyle = "#7ac27a";
   ctx.fillRect(0, 350, canvas.width, 50);
 
   if(!celebrationStarted) {
-    // Move obstacles
     obstacleObjects.forEach(o => o.x -= speed*dt);
-    // Spawn new obstacles
+
     if(obstacleObjects.length === 0 && obstacles.length > 0) spawnObstacle();
-    // Check collision
+
     obstacleObjects = obstacleObjects.filter(o => {
       if(o.x < -100) return false;
       if(Math.abs(o.x - nymisha.x) < 40 && nymisha.y > 280) {
-        score -= 5; // hit penalty
+        score -= 5;
         return false;
       }
       return true;
     });
 
-    // Move Nymisha
     nymisha.y += nymisha.vy;
     nymisha.vy += gravity;
     if(nymisha.y >= 300) { nymisha.y = 300; nymisha.vy = 0; nymisha.jumping = false; }
 
-    // If no obstacles left → reached Arjun
     if(obstacles.length === 0 && obstacleObjects.length === 0) {
       celebrationStarted = true;
       celebrationStartTime = performance.now();
@@ -133,7 +125,6 @@ function loop(ts) {
       happySound.play();
     }
   } else {
-    // Celebration jump phase
     let elapsed = performance.now() - celebrationStartTime;
     nymisha.y += nymisha.vy;
     nymisha.vy += gravity;
@@ -146,17 +137,13 @@ function loop(ts) {
     if(elapsed >= CELEB_MS) {
       messageEl.textContent = "🎉 You Won! 🎉";
       messageEl.style.display = "block";
-      return; // stop loop
+      return;
     }
   }
 
-  // Draw Nymisha
   glossyBall(nymisha.x, nymisha.y, 25, "Nymisha", Math.floor(ts/400)%2===0);
-
-  // Draw Arjun
   glossyBall(arjun.x, arjun.y, 25, "Arjun", Math.floor(ts/500)%2===0);
 
-  // Draw obstacles
   obstacleObjects.forEach(o => {
     ctx.fillStyle = "#ffcc00";
     ctx.fillRect(o.x, o.y, 40, 40);
@@ -166,13 +153,11 @@ function loop(ts) {
     ctx.fillText(o.name, o.x + 20, o.y + 55);
   });
 
-  // Update score
   scoreEl.textContent = "Score: " + score;
 
   requestAnimationFrame(loop);
 }
 
-// Start
 spawnObstacle();
 requestAnimationFrame(loop);
 </script>
