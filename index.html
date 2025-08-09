@@ -1,165 +1,525 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Nymisha Runner</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Jumping Ball Runner — Nymisha (Purple)</title>
 <style>
-  body {
-    margin: 0;
-    background: linear-gradient(#aee1f9, #ffffff);
-    overflow: hidden;
-    font-family: sans-serif;
+  :root{
+    --bg1:#ffefef;
+    --bg2:#eef9ff;
+    --accent:#8b5cf6; /* purple accent */
+    --muted:#6b7280;
+    --panel: rgba(255,255,255,0.92);
   }
-  canvas { display: block; margin: 0 auto; background: #cce7ff; }
-  #score { position: absolute; top: 10px; left: 10px; font-size: 20px; background: rgba(255,255,255,0.8); padding: 5px 10px; border-radius: 8px; }
-  #message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 32px; background: rgba(255,255,255,0.9); padding: 20px; border-radius: 10px; display: none; }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+  .wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:18px;box-sizing:border-box;background:linear-gradient(180deg,var(--bg2),var(--bg1));}
+  h1{margin:6px 0;font-size:20px;color:#333}
+  .hud{display:flex;gap:12px;align-items:center;padding:8px 12px;background:var(--panel);border-radius:12px;box-shadow:0 10px 30px rgba(17,24,39,0.06);font-weight:700}
+  .hud div{font-size:14px;color:var(--muted)}
+  #canvasWrap{width:min(980px,96vw);height:62vh;max-height:760px;border-radius:14px;overflow:hidden;margin-top:12px;box-shadow:0 18px 50px rgba(10,30,60,0.12);background:linear-gradient(180deg,#eaf6ff,#fff8f3);position:relative}
+  canvas{display:block;width:100%;height:100%}
+  .controls{display:flex;gap:8px;margin-top:12px}
+  button{border:0;padding:10px 14px;border-radius:10px;font-weight:800;cursor:pointer;background:var(--accent);color:white;box-shadow:0 8px 18px rgba(139,92,246,0.14)}
+  button.secondary{background:#4b6ef6}
+  #msg{margin-top:10px;color:#0b6;font-weight:800;min-height:20px}
+  @media (max-width:520px){h1{font-size:18px}}
 </style>
 </head>
 <body>
-<div id="score">Score: 0</div>
-<div id="message"></div>
-<canvas id="game" width="800" height="400"></canvas>
-<audio id="happySound" src="https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg"></audio>
+  <div class="wrap">
+    <h1>Jumping Ball Runner — Nymisha (Purple)</h1>
+    <div class="hud" id="hud">
+      <div>Score: <span id="score">0</span></div>
+      <div>High: <span id="high">0</span></div>
+      <div>Speed: <span id="speed">1.0x</span></div>
+      <div>Passed: <span id="passed">0</span>/5</div>
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="canvas" width="960" height="600"></canvas>
+    </div>
+
+    <div class="controls">
+      <button id="start">Start</button>
+      <button id="retry" class="secondary" style="display:none">Retry</button>
+      <button id="mute">🔊 Sound: On</button>
+    </div>
+    <div id="msg">Press Start → Space / Click / Tap to jump. Clear the labeled obstacles: Kiwi issues, Life issues, Body pain, Seema aunty, Crying. Reach Arjun to celebrate.</div>
+  </div>
+
 <script>
-const canvas = document.getElementById('game');
+/* ===========================
+   Config + requested changes
+   - speed increased by 10%
+   - "Seema aunty" label
+   - Arjun jumps for 5s before win
+   =========================== */
+const TOTAL_OBS = 5;
+const OB_LABELS = ["Kiwi issues","Life issues","Body pain","Seema aunty","Crying"];
+const BASE_SPEED = 2.0 * 1.10;  // 10% faster than previous base (your request)
+const SPEED_ACCEL = 0.00045;
+const GRAVITY = 0.6;
+const JUMP_V = -13;
+const HIGH_KEY = 'nymisha_purple_high_v1';
+const ARJUN_CELEB_MS = 5000; // 5 seconds celebration
+
+/* ===========================
+   Canvas & DOM
+   =========================== */
+const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+let CW = canvas.width, CH = canvas.height;
+
 const scoreEl = document.getElementById('score');
-const messageEl = document.getElementById('message');
-const happySound = document.getElementById('happySound');
+const highEl = document.getElementById('high');
+const speedEl = document.getElementById('speed');
+const passedEl = document.getElementById('passed');
+const startBtn = document.getElementById('start');
+const retryBtn = document.getElementById('retry');
+const muteBtn = document.getElementById('mute');
+const msgEl = document.getElementById('msg');
 
-let obstacles = [
-  "Kiwi issues", "Life issues", "Body pain", "Seema aunty", "Crying"
-];
-let speed = 3.3; // 10% faster than old 3.0
-let gravity = 0.6;
-let jumpPower = -10;
+let highScore = Number(localStorage.getItem(HIGH_KEY) || 0);
+highEl.textContent = highScore;
 
-let nymisha = { x: 50, y: 300, vy: 0, jumping: false };
-let arjun = { x: 700, y: 300, vy: 0, jumping: false };
+/* ===========================
+   Audio (WebAudio)
+   =========================== */
+let audioCtx = null;
+let soundOn = true;
+function ensureAudio(){ if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+function tone(freq, dur=0.08, type='sine', vol=0.12){
+  if(!soundOn) return;
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.value = vol;
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+  o.stop(audioCtx.currentTime + dur + 0.03);
+}
+function sJump(){ tone(520,0.06,'sine',0.12); }
+function sPass(){ tone(920,0.05,'triangle',0.12); }
+function sHit(){ tone(180,0.18,'sawtooth',0.2); }
+function sWin(){ tone(1180,0.12,'triangle',0.14); setTimeout(()=>tone(1480,0.08,'sine',0.12),120); }
 
-let score = 0;
-let obstacleObjects = [];
-let celebrationStarted = false;
-let celebrationStartTime = 0;
-const CELEB_MS = 5000;
+/* ===========================
+   Game State
+   =========================== */
+let running=false, paused=true, lastTS=0;
+let world = { speed: BASE_SPEED, distance: 0, obstacles: [], passed: 0, score: 0 };
+const player = { screenX: 160, y:0, vy:0, size:44, grounded:true, blinkTimer:0, blinkDur:0, blinking:false };
+let finishX = 0;
+let arjun = { worldX:0, jumping:false, jt:0, jumpStart:0, blinkTimer:0, blinking:false };
 
-function glossyBall(x, y, radius, label, faceBlink) {
-  let grad = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/5, x, y, radius);
-  grad.addColorStop(0, "#d8b3ff");
-  grad.addColorStop(1, "#7a3db8");
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI*2);
-  ctx.fill();
+/* ===========================
+   Canvas fit
+   =========================== */
+function fit() { CW = canvas.width = 960; CH = canvas.height = 600; }
+fit(); window.addEventListener('resize', fit);
 
-  ctx.fillStyle = "#000";
-  let eyeOffsetY = faceBlink ? y+2 : y;
-  ctx.beginPath(); ctx.arc(x - radius/3, eyeOffsetY - radius/4, 4, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(x + radius/3, eyeOffsetY - radius/4, 4, 0, Math.PI*2); ctx.fill();
-
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(x, y+2, radius/2.5, 0, Math.PI);
-  ctx.stroke();
-
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 14px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(label, x, y + radius + 15);
+/* ===========================
+   Build track
+   =========================== */
+function buildTrack(){
+  world.obstacles = [];
+  let x = 600;
+  for(let i=0;i<TOTAL_OBS;i++){
+    x += 230 + i*36 + Math.random()*80;
+    const w = 64 + Math.round(Math.random()*22);
+    const h = 50 + Math.round(Math.random()*20);
+    world.obstacles.push({ worldX: Math.round(x), w, h, label: OB_LABELS[i], passed:false });
+  }
+  finishX = world.obstacles[world.obstacles.length-1].worldX + 420;
+  arjun.worldX = finishX + 60;
 }
 
-function spawnObstacle() {
-  if(obstacles.length > 0){
-    let name = obstacles.shift();
-    obstacleObjects.push({ x: canvas.width, y: 300, name });
+/* ===========================
+   Camera helper
+   =========================== */
+function worldToScreen(wx){
+  const cam = world.distance - player.screenX;
+  return Math.round(wx - cam);
+}
+
+/* ===========================
+   Drawing - Aesthetic + Glossy purple ball
+   =========================== */
+function drawBackground(t){
+  ctx.fillStyle = "#f7fbff";
+  ctx.fillRect(0,0,CW,CH);
+
+  const base = CH - 120;
+  const o1 = -(world.distance*0.08) % (CW*2);
+  ctx.fillStyle = "#e6fbf0";
+  ctx.beginPath(); ctx.moveTo(0,base);
+  for(let i=0;i<6;i++){
+    const cx = i*(CW/3) + o1;
+    const h = 48 + 14*Math.sin(i + t*0.003);
+    ctx.quadraticCurveTo(cx+80, base-h, cx + (CW/3), base);
+  }
+  ctx.lineTo(CW,CH); ctx.lineTo(0,CH); ctx.fill();
+
+  // soft clouds
+  ctx.globalAlpha = 0.95;
+  const o2 = -(world.distance*0.24) % (CW+200);
+  ctx.fillStyle = "#ffffff";
+  for(let i=0;i<6;i++){
+    const cx = ((i*180)+o2)%(CW+220) - 110;
+    ctx.beginPath(); ctx.ellipse(cx, 76 + 8*Math.sin(i+t*0.006), 56, 26, 0,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // decorative foreground
+  ctx.fillStyle = "#fbfff8";
+  ctx.fillRect(0, CH - 100, CW, 100);
+  for(let i=0;i<22;i++){
+    const x = (i*88 - (world.distance*0.5)%88);
+    ctx.fillStyle = i%2 ? "rgba(141, 85, 255, 0.06)" : "rgba(141,85,255,0.04)";
+    ctx.fillRect(x, CH-100 + (i%2?20:8), 68, 28);
   }
 }
 
-function jump(player) {
-  if(!player.jumping) {
-    player.vy = jumpPower;
-    player.jumping = true;
-  }
+/* glossy gradient helper for purple ball */
+function glossyPurpleGradient(cx, cy, r){
+  const g = ctx.createRadialGradient(cx - r*0.35, cy - r*0.45, r*0.12, cx, cy, r*1.2);
+  g.addColorStop(0, "#f3e6ff");
+  g.addColorStop(0.2, "#d9b8ff");
+  g.addColorStop(0.6, "#9b6cff");
+  g.addColorStop(1, "#5b2bdc");
+  return g;
 }
 
-document.addEventListener('keydown', e => {
-  if(e.code === 'Space') jump(nymisha);
-});
-canvas.addEventListener('click', () => jump(nymisha));
-
-let lastTime = 0;
-function loop(ts) {
-  let dt = (ts - lastTime) / 16.67;
-  lastTime = ts;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "#7ac27a";
-  ctx.fillRect(0, 350, canvas.width, 50);
-
-  if(!celebrationStarted) {
-    obstacleObjects.forEach(o => o.x -= speed*dt);
-
-    if(obstacleObjects.length === 0 && obstacles.length > 0) spawnObstacle();
-
-    obstacleObjects = obstacleObjects.filter(o => {
-      if(o.x < -100) return false;
-      if(Math.abs(o.x - nymisha.x) < 40 && nymisha.y > 280) {
-        score -= 5;
-        return false;
-      }
-      return true;
-    });
-
-    nymisha.y += nymisha.vy;
-    nymisha.vy += gravity;
-    if(nymisha.y >= 300) { nymisha.y = 300; nymisha.vy = 0; nymisha.jumping = false; }
-
-    if(obstacles.length === 0 && obstacleObjects.length === 0) {
-      celebrationStarted = true;
-      celebrationStartTime = performance.now();
-      nymisha.vy = -5;
-      arjun.vy = -5;
-      nymisha.jumping = true;
-      arjun.jumping = true;
-      happySound.play();
+/* blinking helper */
+function updateBlink(entity, dt){
+  entity.blinkTimer -= dt;
+  if(entity.blinkTimer <= 0){
+    entity.blinking = true;
+    entity.blinkDur = 120 + Math.random()*260; // ms closed
+    entity.blinkTimer = 2000 + Math.random()*3000; // next open after interval
+  }
+  if(entity.blinking){
+    entity.blinkDur -= dt;
+    if(entity.blinkDur <= 0){
+      entity.blinking = false;
     }
+  }
+}
+
+/* draw Nymisha with animated face (blinking) */
+function drawPlayer(t, dt){
+  const sx = player.screenX;
+  const sy = player.y;
+  // shadow
+  ctx.save(); ctx.fillStyle = "rgba(15,10,30,0.12)"; ctx.beginPath(); ctx.ellipse(sx, CH - 120 + 8, player.size*1.0, player.size*0.5, 0,0,Math.PI*2); ctx.fill(); ctx.restore();
+
+  // glossy purple ball
+  const g = glossyPurpleGradient(sx, sy, player.size);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(sx, sy, player.size, 0, Math.PI*2); ctx.fill();
+
+  // glossy highlights
+  ctx.beginPath(); ctx.fillStyle = "rgba(255,255,255,0.16)"; ctx.ellipse(sx - player.size*0.4, sy - player.size*0.6, player.size*0.48, player.size*0.26, -0.6, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.ellipse(sx + player.size*0.28, sy - player.size*0.2, player.size*0.9, player.size*0.45, 0.4, 0, Math.PI*2); ctx.fill();
+
+  // face
+  ctx.fillStyle = "#201a3a";
+  const eyeR = player.size*0.12;
+  const eyeYOffset = player.size*0.08;
+  if(player.blinking){
+    // closed eyes (lines)
+    ctx.strokeStyle = "#201a3a"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sx - player.size*0.42, sy - eyeYOffset); ctx.quadraticCurveTo(sx - player.size*0.28, sy - eyeYOffset + 6, sx - player.size*0.12, sy - eyeYOffset); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + player.size*0.05, sy - eyeYOffset); ctx.quadraticCurveTo(sx + player.size*0.2, sy - eyeYOffset + 6, sx + player.size*0.36, sy - eyeYOffset); ctx.stroke();
   } else {
-    let elapsed = performance.now() - celebrationStartTime;
-    nymisha.y += nymisha.vy;
-    nymisha.vy += gravity;
-    if(nymisha.y >= 300) { nymisha.y = 300; if(elapsed < CELEB_MS) nymisha.vy = -5; }
+    // open eyes
+    ctx.beginPath(); ctx.arc(sx - player.size*0.28, sy - eyeYOffset, eyeR, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx + player.size*0.06, sy - eyeYOffset, eyeR, 0, Math.PI*2); ctx.fill();
+    // pupils
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(sx - player.size*0.34, sy - eyeYOffset + 2, eyeR*0.38, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx - player.size*0.22, sy - eyeYOffset + 2, eyeR*0.12, 0, Math.PI*2); ctx.fillStyle = "#201a3a"; ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(sx - player.size*0.02, sy - eyeYOffset + 2, eyeR*0.38, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx + player.size*0.12, sy - eyeYOffset + 2, eyeR*0.12, 0, Math.PI*2); ctx.fillStyle = "#201a3a"; ctx.fill();
+  }
 
-    arjun.y += arjun.vy;
-    arjun.vy += gravity;
-    if(arjun.y >= 300) { arjun.y = 300; if(elapsed < CELEB_MS) arjun.vy = -5; }
+  // smile
+  ctx.strokeStyle = "#8a3bff"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(sx - player.size*0.08, sy + player.size*0.08); ctx.quadraticCurveTo(sx, sy + player.size*0.42, sx + player.size*0.23, sy + player.size*0.08); ctx.stroke();
 
-    if(elapsed >= CELEB_MS) {
-      messageEl.textContent = "🎉 You Won! 🎉";
-      messageEl.style.display = "block";
+  // three finger dimples (bowling-like holes) small subtle circles
+  ctx.fillStyle = "rgba(0,0,0,0.06)";
+  ctx.beginPath(); ctx.arc(sx + player.size*0.32, sy - player.size*0.1, player.size*0.14, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(sx + player.size*0.2, sy - player.size*0.28, player.size*0.08, 0, Math.PI*2); ctx.fill();
+
+  // name label
+  ctx.fillStyle = "rgba(20,20,20,0.85)";
+  ctx.font = "700 16px Inter, Arial";
+  ctx.textAlign = "center";
+  ctx.fillText("Nymisha", sx, sy - player.size - 12);
+
+  // update blink timer
+  updateBlink(player, dt);
+}
+
+/* draw obstacles */
+function drawObstacle(ob, t){
+  const sx = worldToScreen(ob.worldX);
+  if(sx < -200 || sx > CW + 200) return;
+  const baseY = CH - 120;
+  ctx.save(); ctx.translate(sx, baseY);
+  roundRect(ctx, -ob.w/2, -ob.h, ob.w, ob.h, 12);
+  // choose soft palette
+  let fillColor = "#ffeef2";
+  if(ob.label === "Kiwi issues") fillColor = "#e6fff2";
+  if(ob.label === "Life issues") fillColor = "#ffdede";
+  if(ob.label === "Body pain") fillColor = "#fff2d9";
+  if(ob.label === "Seema aunty") fillColor = "#f0e7ff";
+  if(ob.label === "Crying") fillColor = "#ffdce6";
+  ctx.fillStyle = fillColor; ctx.fill();
+
+  ctx.fillStyle = "#2a2a2a"; ctx.font = "700 14px Inter, Arial"; ctx.textAlign = "center";
+  ctx.fillText(ob.label, 0, -ob.h - 12);
+
+  // small decorative circle
+  ctx.beginPath(); ctx.fillStyle = "rgba(255,255,255,0.75)"; ctx.arc(ob.w/4, -ob.h*0.18, ob.w*0.12, 0, Math.PI*2); ctx.fill();
+
+  if(ob.passed){
+    ctx.fillStyle = "rgba(0,0,0,0.06)"; ctx.beginPath(); ctx.arc(0, -ob.h/2 + 4, ob.w/2 + 8, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.font = "800 20px Arial"; ctx.fillText("✓", 0, -ob.h/2 + 8);
+  }
+  ctx.restore();
+}
+
+/* draw Arjun (smaller purple ball), animated blink + jump */
+function drawArjun(t, dt){
+  const sx = worldToScreen(arjun.worldX);
+  if(sx < -200 || sx > CW + 200) return;
+  const base = CH - 160;
+  const jumpOffset = arjun.jumping ? Math.abs(Math.sin(arjun.jt*0.03))*28 : 0;
+
+  // glossy baby yellow ball (contrasting)
+  const gg = ctx.createLinearGradient(sx-20, base-40-jumpOffset, sx+20, base+20-jumpOffset);
+  gg.addColorStop(0, "#fff7c8"); gg.addColorStop(1, "#fff1a8");
+  ctx.fillStyle = gg;
+  ctx.beginPath(); ctx.arc(sx, base - jumpOffset, 34, 0, Math.PI*2); ctx.fill();
+
+  // eyes (blink)
+  const eyeY = base - 18 - jumpOffset;
+  if(arjun.blinking){
+    ctx.strokeStyle = "#2b2b2b"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sx - 14, eyeY); ctx.quadraticCurveTo(sx - 6, eyeY + 6, sx + 2, eyeY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + 8, eyeY); ctx.quadraticCurveTo(sx + 14, eyeY + 6, sx + 22, eyeY); ctx.stroke();
+  } else {
+    ctx.fillStyle = "#2b2b2b"; ctx.beginPath(); ctx.arc(sx - 10, eyeY, 5, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx + 8, eyeY, 5, 0, Math.PI*2); ctx.fill();
+  }
+
+  // smile
+  ctx.strokeStyle = "#b35b00"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(sx - 6, base + 6 - jumpOffset); ctx.quadraticCurveTo(sx, base + 22 - jumpOffset, sx + 12, base + 6 - jumpOffset); ctx.stroke();
+
+  // nameplate
+  ctx.fillStyle = "rgba(255,255,255,0.95)"; roundRect(ctx, sx - 60, base + 28, 120, 36, 8); ctx.fill();
+  ctx.fillStyle = "#333"; ctx.font = "700 14px Inter, Arial"; ctx.textAlign = "center"; ctx.fillText("Arjun", sx, base + 52);
+
+  // update blink timer
+  updateBlink(arjun, dt);
+}
+
+/* ===========================
+   Helpers
+   =========================== */
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+/* ===========================
+   Collision & Passing
+   =========================== */
+function checkCollision(){
+  const px = player.screenX;
+  const py = player.y;
+  for(const ob of world.obstacles){
+    const sx = worldToScreen(ob.worldX);
+    const sy = CH - 120 - ob.h/2;
+    const rx = Math.max(sx - ob.w/2, Math.min(px, sx + ob.w/2));
+    const ry = Math.max(sy - ob.h/2, Math.min(py, sy + ob.h/2));
+    const dx = px - rx, dy = py - ry;
+    if(dx*dx + dy*dy < (player.size*player.size*0.85)){
+      const playerBottom = py + player.size*0.9;
+      const topOfObs = sy - ob.h/2;
+      if(playerBottom < topOfObs + 6){
+        if(!ob.passed){
+          ob.passed = true;
+          world.passed++;
+          world.score += 120;
+          sPass();
+          passedEl.textContent = `${world.passed}/${TOTAL_OBS}`;
+        }
+      } else {
+        sHit();
+        endGame(false);
+      }
+    }
+  }
+}
+
+/* ===========================
+   Main loop, reset, start, end
+   =========================== */
+function reset(){
+  world.speed = BASE_SPEED;
+  world.distance = 0;
+  world.passed = 0;
+  world.score = 0;
+  player.vy = 0;
+  player.y = CH - 120 - player.size;
+  player.grounded = true;
+  player.blinkTimer = 1400 + Math.random()*1800; player.blinking = false;
+  arjun.jumping = false; arjun.jt = 0; arjun.jumpStart = 0; arjun.blinkTimer = 1600 + Math.random()*1600; arjun.blinking = false;
+  buildTrack();
+  scoreEl.textContent = 0;
+  passedEl.textContent = `0/${TOTAL_OBS}`;
+  speedEl.textContent = (world.speed/BASE_SPEED).toFixed(2) + 'x';
+  retryBtn.style.display = 'none';
+  msgEl.style.color = '#0b6';
+  msgEl.textContent = 'Press Start → Space / Click / Tap to jump.';
+}
+
+function startGame(){
+  if(!running){
+    running = true; paused = false; lastTS = performance.now();
+    startBtn.textContent = 'Pause';
+    ensureAudio();
+    requestAnimationFrame(loop);
+  } else {
+    paused = !paused;
+    startBtn.textContent = paused ? 'Resume' : 'Pause';
+    if(!paused){ lastTS = performance.now(); requestAnimationFrame(loop); }
+  }
+}
+
+function endGame(win){
+  running = false; paused = true;
+  retryBtn.style.display = 'inline-block';
+  startBtn.textContent = 'Start';
+  if(win){
+    msgEl.style.color = '#0b6'; msgEl.textContent = `🎉 Nymisha reached Arjun! Well done!`;
+    sWin();
+  } else {
+    msgEl.style.color = '#b00'; msgEl.textContent = `💥 Oops — Nymisha hit an issue. Click Retry to try again.`;
+  }
+  if(Math.floor(world.score) > highScore){
+    highScore = Math.floor(world.score);
+    localStorage.setItem(HIGH_KEY, highScore);
+    highEl.textContent = highScore;
+    msgEl.textContent += '  🚀 New High Score!';
+  }
+}
+
+/* ===========================
+   Loop: arjun jumps for 5s before ending
+   =========================== */
+function loop(ts){
+  if(paused) return;
+  const dt = Math.min(40, ts - lastTS);
+  lastTS = ts;
+
+  // update speed/distance
+  world.speed += SPEED_ACCEL * dt;
+  world.distance += world.speed * (dt * 0.06);
+
+  // player physics
+  player.vy += GRAVITY * (dt * 0.04);
+  player.y += player.vy * (dt * 0.06);
+  const groundY = CH - 120 - player.size;
+  if(player.y >= groundY){ player.y = groundY; player.vy = 0; player.grounded = true; } else player.grounded = false;
+
+  // update blinking timers with dt
+  updateBlink(player, dt);
+  updateBlink(arjun, dt);
+
+  // arjun starts jumping when near finish - start 5s timer
+  if(world.distance >= finishX - 80){
+    if(!arjun.jumping){
+      arjun.jumping = true;
+      arjun.jumpStart = performance.now();
+      sWin(); // happy sound when celebration begins
+      world.score += 300;
+    }
+  }
+
+  if(arjun.jumping){
+    arjun.jt += dt;
+    // after ARJUN_CELEB_MS milliseconds from jumpStart => end game with win
+    if(performance.now() - arjun.jumpStart >= ARJUN_CELEB_MS){
+      endGame(true);
       return;
     }
   }
 
-  glossyBall(nymisha.x, nymisha.y, 25, "Nymisha", Math.floor(ts/400)%2===0);
-  glossyBall(arjun.x, arjun.y, 25, "Arjun", Math.floor(ts/500)%2===0);
+  // collisions & passing
+  checkCollision();
 
-  obstacleObjects.forEach(o => {
-    ctx.fillStyle = "#ffcc00";
-    ctx.fillRect(o.x, o.y, 40, 40);
-    ctx.fillStyle = "#000";
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(o.name, o.x + 20, o.y + 55);
-  });
+  // score gentle increase
+  world.score += 0.08 * (dt * 0.06);
+  scoreEl.textContent = Math.floor(world.score);
+  speedEl.textContent = (world.speed/BASE_SPEED).toFixed(2) + 'x';
 
-  scoreEl.textContent = "Score: " + score;
+  // draw
+  ctx.clearRect(0,0,CW,CH);
+  drawBackground(performance.now());
+  for(const ob of world.obstacles) drawObstacle(ob, performance.now());
+  drawArjun(performance.now(), dt);
+  drawPlayer(performance.now(), dt);
 
   requestAnimationFrame(loop);
 }
 
-spawnObstacle();
-requestAnimationFrame(loop);
+/* ===========================
+   Input controls
+   =========================== */
+function doJump(){
+  if(!running) return;
+  if(player.grounded){
+    player.vy = JUMP_V;
+    player.grounded = false;
+    sJump();
+  } else {
+    if(player.vy > -6){ player.vy += JUMP_V*0.35; tone(700,0.04,'square',0.07); }
+  }
+}
+window.addEventListener('keydown', e=>{ if(e.code==='Space'){ e.preventDefault(); doJump(); }});
+canvas.addEventListener('mousedown', ()=> doJump());
+canvas.addEventListener('touchstart', (e)=>{ e.preventDefault(); doJump(); }, {passive:false});
+
+/* ===========================
+   UI bindings
+   =========================== */
+startBtn.addEventListener('click', ()=>{
+  if(!running){ reset(); startGame(); } else startGame();
+});
+retryBtn.addEventListener('click', ()=>{ reset(); startGame(); });
+muteBtn.addEventListener('click', ()=>{ soundOn = !soundOn; muteBtn.textContent = soundOn ? '🔊 Sound: On' : '🔇 Sound: Off'; });
+
+/* ===========================
+   Init
+   =========================== */
+(function init(){
+  reset();
+  document.addEventListener('touchstart', function once(){ ensureAudio(); document.removeEventListener('touchstart', once); }, {passive:true});
+})();
 </script>
 </body>
 </html>
